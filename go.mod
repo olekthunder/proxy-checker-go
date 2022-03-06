@@ -2,4 +2,7 @@ module proxy-checker-go
 
 go 1.17
 
-require golang.org/x/net v0.0.0-20220225172249-27dd8689420f
+require (
+	github.com/pkg/errors v0.9.1
+	golang.org/x/net v0.0.0-20220225172249-27dd8689420f
+)
