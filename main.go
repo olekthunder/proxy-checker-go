@@ -44,6 +44,7 @@ func ParseProxy(s string) (ProxyConnectionData, error) {
 type ProxyDB interface {
 	Add(proxy *ProxyInfo) error
 	Proxies() chan *ProxyInfo
+	ByCountryCode(code string) chan *ProxyInfo
 	Refresh()
 }
 
@@ -81,6 +82,21 @@ func (pdb *LocalProxyDB) Proxies() chan *ProxyInfo {
 		defer pdb.lock.RUnlock()
 		for proxy := range pdb.proxies {
 			ch <- proxy
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+func (pdb *LocalProxyDB) ByCountryCode(code string) chan *ProxyInfo {
+	ch := make(chan *ProxyInfo)
+	go func() {
+		pdb.lock.RLock()
+		defer pdb.lock.RUnlock()
+		if proxies, ok := pdb.byCountryCode[code]; ok {
+			for proxy := range proxies {
+				ch <- proxy
+			}
 		}
 		close(ch)
 	}()
@@ -207,7 +223,12 @@ func (stream ProxyStream) EncodeAsJsonArray(w io.Writer) {
 
 func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
-	s := ProxyStream(jh.db.Proxies())
+	var s ProxyStream
+	if code := string(ctx.QueryArgs().Peek("code")); code != "" {
+		s = jh.db.ByCountryCode(code)
+	} else {
+		s = ProxyStream(jh.db.Proxies())
+	}
 	s.EncodeAsJsonArray(ctx)
 }
 
@@ -220,7 +241,10 @@ func runServer(addr string, db ProxyDB) {
 func main() {
 	db := NewProxyDB()
 	fmt.Println("Refreshing...")
-	go db.Refresh()
+	go func() {
+		db.Refresh()
+		time.Sleep(5 * time.Minute)
+	}()
 	addr := ":8080"
 	fmt.Printf("Running at %s\n", addr)
 	runServer(addr, db)
