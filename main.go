@@ -195,10 +195,6 @@ func (pdb *LocalProxyDB) Refresh() {
 	pdb.byCountryCode = newDB.byCountryCode
 }
 
-type JsonHandler struct {
-	db ProxyDB
-}
-
 type ProxyStream chan *ProxyInfo
 
 func (stream ProxyStream) EncodeAsJsonArray(w io.Writer) {
@@ -221,20 +217,46 @@ func (stream ProxyStream) EncodeAsJsonArray(w io.Writer) {
 	s.Flush()
 }
 
-func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
-	ctx.SetContentType("application/json")
+func getProxyStream(db ProxyDB, ctx *fasthttp.RequestCtx) ProxyStream {
 	var s ProxyStream
 	if code := string(ctx.QueryArgs().Peek("code")); code != "" {
-		s = jh.db.ByCountryCode(code)
+		s = db.ByCountryCode(code)
 	} else {
-		s = ProxyStream(jh.db.Proxies())
+		s = ProxyStream(db.Proxies())
 	}
+	return s
+}
+
+func (stream ProxyStream) EncodeAsTxtList(w io.Writer) {
+	for p := range stream {
+		w.Write([]byte(p.proxy.Addr() + "\n"))
+	}
+}
+
+type JsonHandler struct {
+	db ProxyDB
+}
+
+func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
+	ctx.SetContentType("application/json")
+	s := getProxyStream(jh.db, ctx)
 	s.EncodeAsJsonArray(ctx)
+}
+
+type TxtHandler struct {
+	db ProxyDB
+}
+
+func (th TxtHandler) HandleGet(ctx *fasthttp.RequestCtx) {
+	ctx.SetContentType("application/txt")
+	s := getProxyStream(th.db, ctx)
+	s.EncodeAsTxtList(ctx)
 }
 
 func runServer(addr string, db ProxyDB) {
 	router := fasthttprouter.New()
 	router.GET("/json", JsonHandler{db}.HandleGet)
+	router.GET("/socks5.txt", TxtHandler{db}.HandleGet)
 	fasthttp.ListenAndServe(addr, router.Handler)
 }
 
