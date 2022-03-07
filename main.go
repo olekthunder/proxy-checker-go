@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -182,16 +183,16 @@ type JsonHandler struct {
 	db ProxyDB
 }
 
-func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
-	ctx.SetContentType("application/json")
-	s := jsoniter.NewStream(jsoniter.ConfigDefault, ctx, 0)
+type ProxyStream chan *ProxyInfo
+
+func (stream ProxyStream) EncodeAsJsonArray(w io.Writer) {
+	s := jsoniter.NewStream(jsoniter.ConfigDefault, w, 0)
 	s.WriteArrayStart()
-	ch := jh.db.Proxies()
-	p, ok := <-ch
+	p, ok := <-stream
 	if ok {
 		for {
 			s.WriteVal(p)
-			p, ok = <-ch
+			p, ok = <-stream
 			if ok {
 				s.WriteMore()
 			} else {
@@ -202,6 +203,12 @@ func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
 	}
 	s.WriteArrayEnd()
 	s.Flush()
+}
+
+func (jh JsonHandler) HandleGet(ctx *fasthttp.RequestCtx) {
+	ctx.SetContentType("application/json")
+	s := ProxyStream(jh.db.Proxies())
+	s.EncodeAsJsonArray(ctx)
 }
 
 func runServer(addr string, db ProxyDB) {
