@@ -15,8 +15,14 @@ import (
 	"github.com/buaazp/fasthttprouter"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/valyala/fasthttp"
 	"golang.org/x/net/proxy"
+)
+
+var (
+	GetProxiesUrl = os.Getenv("GET_PROXIES_URL")
+	Addr          = os.Getenv("ADDR")
 )
 
 type ProxyConnectionData struct {
@@ -128,7 +134,6 @@ func (p *ProxyInfo) MarshalJSON() ([]byte, error) {
 func checkProxy(p ProxyConnectionData) (*ProxyInfo, error) {
 	dialer, err := proxy.SOCKS5("tcp", p.Addr(), nil, proxy.Direct)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "can't connect to the proxy:", err)
 		return nil, errors.WithStack(err)
 	}
 	httpTransport := &http.Transport{}
@@ -142,9 +147,6 @@ func checkProxy(p ProxyConnectionData) (*ProxyInfo, error) {
 	decoder := json.NewDecoder(resp.Body)
 	r := new(ProxyCheckResponse)
 	decoder.Decode(r)
-	if r.Query != p.Ip {
-		return nil, errors.New("Ip mismatch")
-	}
 	return &ProxyInfo{proxy: p, CountryCode: r.CountryCode}, nil
 }
 
@@ -152,16 +154,17 @@ func getProxies() chan ProxyConnectionData {
 	ch := make(chan ProxyConnectionData)
 	go func() {
 		client := http.Client{Timeout: time.Second * 10}
-		resp, err := client.Get("http://localhost:8000/socks5.txt")
+		resp, err := client.Get(GetProxiesUrl)
 		if err != nil {
-			panic("NO SOCKS5.txt")
+			log.Error("Can't get proxies")
+			return
 		}
 		defer resp.Body.Close()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			p, err := ParseProxy(scanner.Text())
 			if err != nil {
-				fmt.Println("Invalid proxy")
+				log.Warnf("invalid proxy: %s", p.Addr())
 				return
 			}
 			ch <- p
@@ -180,9 +183,8 @@ func (pdb *LocalProxyDB) Refresh() {
 		go func() {
 			proxyInfo, err := checkProxy(p)
 			if err != nil {
-				// fmt.Println(err)
+				log.Debug(err)
 			} else {
-				fmt.Printf("ADDED! %v\n", p)
 				newDB.Add(proxyInfo)
 			}
 			wg.Done()
@@ -256,18 +258,18 @@ func (th TxtHandler) HandleGet(ctx *fasthttp.RequestCtx) {
 func runServer(addr string, db ProxyDB) {
 	router := fasthttprouter.New()
 	router.GET("/json", JsonHandler{db}.HandleGet)
-	router.GET("/socks5.txt", TxtHandler{db}.HandleGet)
+	router.GET("/proxies.txt", TxtHandler{db}.HandleGet)
 	fasthttp.ListenAndServe(addr, router.Handler)
 }
 
 func main() {
+	log.SetLevel(log.InfoLevel)
 	db := NewProxyDB()
-	fmt.Println("Refreshing...")
+	log.Info("Refreshing...")
 	go func() {
 		db.Refresh()
 		time.Sleep(5 * time.Minute)
 	}()
-	addr := ":8080"
-	fmt.Printf("Running at %s\n", addr)
-	runServer(addr, db)
+	log.Infof("Running at %s\n", Addr)
+	runServer(Addr, db)
 }
